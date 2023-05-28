@@ -31,7 +31,7 @@
 #define SerialRTK Serial3               //RTK radio
 HardwareSerial* SerialGPS = &Serial2;   //Main postion receiver (GGA) (Serial2 must be used here with T4.0 / Basic Panda boards - Should auto swap)
 HardwareSerial* SerialGPS2 = &Serial7;  //Dual heading receiver 
-HardwareSerial* SerialGPSTmp = NULL;
+HardwareSerial* SerialGPSTmp = &Serial8;
 //HardwareSerial* SerialAOG = &Serial;
 
 const int32_t baudAOG = 115200;
