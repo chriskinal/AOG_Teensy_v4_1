@@ -76,6 +76,18 @@ uint32_t READ_BNO_TIME = 0;   //Used stop BNO data pile up (This version is with
 #define AUTOSTEER_ACTIVE_LED 12   //Green
 uint32_t gpsReadyTime = 0;        //Used for GGA timeout
 
+void errorHandler();
+void GGA_Handler();
+void VTG_Handler();
+void autosteerSetup();
+void EthernetStart();
+void udpNtrip();
+void BuildNmea();
+void relPosDecode();
+void readBNO();
+void autosteerLoop();
+void ReceiveUdp();
+
 //for v2.2
 // #define Power_on_LED 22
 // #define Ethernet_Active_LED 23
