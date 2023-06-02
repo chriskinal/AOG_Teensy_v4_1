@@ -250,6 +250,8 @@ void setup()
   pinMode(AUTOSTEER_STANDBY_LED, OUTPUT);
   pinMode(AUTOSTEER_ACTIVE_LED, OUTPUT);
 
+  digitalWrite(Power_on_LED, 1);
+
   // the dash means wildcard
   parser.setErrorHandler(errorHandler);
   parser.addHandler("G-GGA", GGA_Handler);
@@ -682,12 +684,12 @@ void loop()
     
   if (Ethernet.linkStatus() == LinkOFF) 
   {
-    digitalWrite(Power_on_LED, 1);
+    //digitalWrite(Power_on_LED, 1);
     digitalWrite(Ethernet_Active_LED, 0);
   }
   if (Ethernet.linkStatus() == LinkON) 
   {
-    digitalWrite(Power_on_LED, 0);
+    //digitalWrite(Power_on_LED, 0);
     digitalWrite(Ethernet_Active_LED, 1);
   }
 }//End Loop
