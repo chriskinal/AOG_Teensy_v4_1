@@ -68,11 +68,11 @@ uint32_t READ_BNO_TIME = 0;   //Used stop BNO data pile up (This version is with
 
 //Status LED's
 //#define GGAReceivedLED 13         //Teensy onboard LED
-#define GGAReceivedLED 11         //Teensy onboard LED
-#define Power_on_LED 5            //Red
-#define Ethernet_Active_LED 6     //Green
-#define GPSRED_LED 9              //Red (Flashing = NO IMU or Dual, ON = GPS fix with IMU)
-#define GPSGREEN_LED 10           //Green (Flashing = Dual bad, ON = Dual good)
+#define GGAReceivedLED 13         //Teensy onboard LED
+#define Power_on_LED 5            //Green
+#define Ethernet_Active_LED 6     //Blue
+#define GPSRED_LED 9              //Yellow (Flashing = NO IMU or Dual, ON = GPS fix with IMU)
+#define GPSGREEN_LED 11           //Red (Flashing = Dual bad, ON = Dual good)
 //#define AUTOSTEER_STANDBY_LED 11  //Red
 #define AUTOSTEER_STANDBY_LED 13  //Red
 #define AUTOSTEER_ACTIVE_LED 12   //Green
@@ -252,7 +252,7 @@ void setup()
   pinMode(AUTOSTEER_STANDBY_LED, OUTPUT);
   pinMode(AUTOSTEER_ACTIVE_LED, OUTPUT);
 
-  digitalWrite(Power_on_LED, 1);
+  // digitalWrite(Power_on_LED, 1);
 
   // the dash means wildcard
   parser.setErrorHandler(errorHandler);
@@ -686,12 +686,12 @@ void loop()
     
   if (Ethernet.linkStatus() == LinkOFF) 
   {
-    //digitalWrite(Power_on_LED, 1);
+    digitalWrite(Power_on_LED, 1);
     digitalWrite(Ethernet_Active_LED, 0);
   }
   if (Ethernet.linkStatus() == LinkON) 
   {
-    //digitalWrite(Power_on_LED, 0);
+    digitalWrite(Power_on_LED, 0);
     digitalWrite(Ethernet_Active_LED, 1);
   }
 }//End Loop
