@@ -29,8 +29,8 @@
 // Serial Ports
 #define SerialAOG Serial                //AgIO USB conection
 #define SerialRTK Serial3               //RTK radio
-HardwareSerial* SerialGPS = &Serial2;   //Main postion receiver (GGA) (Serial2 must be used here with T4.0 / Basic Panda boards - Should auto swap)
-HardwareSerial* SerialGPS2 = &Serial7;  //Dual heading receiver 
+HardwareSerial* SerialGPS = &Serial7;   //Main postion receiver (GGA) (Serial2 must be used here with T4.0 / Basic Panda boards - Should auto swap)
+HardwareSerial* SerialGPS2 = &Serial2;  //Dual heading receiver 
 HardwareSerial* SerialGPSTmp = &Serial8;
 //HardwareSerial* SerialAOG = &Serial;
 
@@ -57,7 +57,7 @@ const uint32_t nrBaudrates = sizeof(baudrates)/sizeof(baudrates[0]);
 #define ImuWire Wire        //SCL=19:A5 SDA=18:A4
 #define RAD_TO_DEG_X_10 572.95779513082320876798154814105
 
-//Swap BNO08x roll & pitch?
+//Swap BNO08x roll & ?
 //const bool swapRollPitch = false;
 
 const bool invertRoll= true;  //Used for IMU with dual antenna
@@ -81,6 +81,7 @@ uint32_t gpsReadyTime = 0;        //Used for GGA timeout
 void errorHandler();
 void GGA_Handler();
 void VTG_Handler();
+void HPR_Handler();
 void autosteerSetup();
 void EthernetStart();
 void udpNtrip();
@@ -97,8 +98,6 @@ void ReceiveUdp();
 // #define GPSGREEN_LED 21
 // #define AUTOSTEER_STANDBY_LED 38
 // #define AUTOSTEER_ACTIVE_LED 39
-
-/*****************************************************************/
 
 // Ethernet Options (Teensy 4.1 Only)
 #ifdef ARDUINO_TEENSY41
@@ -164,12 +163,17 @@ uint8_t bno08xAddress;
 BNO080 bno08x;
 
 //Dual
+// Heading correction is enetered into the UM982 config so this can be 0.
+// double headingcorr = 0;
 double headingcorr = 900;  //90deg heading correction (90deg*10)
 // Heading correction 180 degrees, because normally the heading antenna is in front, but we have it at the back
 //double headingcorr = 1800;  // 180deg heading correction (180deg*10)
+// Roll correction. Negative number = left; positive number = right.
+//double rollcorr = 50;
 
 double baseline = 0;
 double rollDual = 0;
+double pitchDual = 0;
 double relPosD = 0;
 double heading = 0;
 
@@ -183,7 +187,7 @@ uint8_t GPS2txbuffer[serial_buffer_size];   //Extra serial tx buffer
 uint8_t RTKrxbuffer[serial_buffer_size];    //Extra serial rx buffer
 
 /* A parser is declared with 3 handlers at most */
-NMEAParser<2> parser;
+NMEAParser<4> parser;
 
 bool isTriggered = false;
 bool blink = false;
@@ -236,6 +240,18 @@ struct ubxPacket
 // Send data to AgIO via usb
 bool sendUSB = true;
 
+/*****************************************************************/
+// UM982 Support
+bool useUM982 = true;
+//#include "calc_crc32.h"
+//#include "UM982_Parser.h"
+#include "zSmoothed.h"
+
+Smoothed <float> smoothRoll;
+
+//UM982Parser<4> umparser;
+/****************************************************************/
+
 // Setup procedure ---------------------------------------------------------------------------------------------------------------
 void setup()
 {
@@ -253,11 +269,22 @@ void setup()
   pinMode(AUTOSTEER_ACTIVE_LED, OUTPUT);
 
   // digitalWrite(Power_on_LED, 1);
-
   // the dash means wildcard
+ 
   parser.setErrorHandler(errorHandler);
   parser.addHandler("G-GGA", GGA_Handler);
   parser.addHandler("G-VTG", VTG_Handler);
+  parser.addHandler("G-HPR", HPR_Handler);
+
+  // UM982 Support
+  useDual = true;
+  smoothRoll.begin(SMOOTHED_AVERAGE, 10);
+  // if (useUM982){
+    // umparser.setErrorHandler(errorHandler);
+    // umparser.addHandler("UNIHEADINGA", UNIHEADINGA_Handler);
+    // umparser.addHandler("BESTNAVXYZA", BESTNAVXYZA_Handler);
+    // umparser.addHandler("BESTNAVXYZHA", BESTNAVXYZHA_Handler);
+  // }
 
   delay(10);
   Serial.begin(baudAOG);
@@ -366,240 +393,251 @@ void setup()
 
 void loop()
 {
-    if (GGA_Available == false && !passThroughGPS && !passThroughGPS2)
-    {
-        if (systick_millis_count - PortSwapTime >= 10000)
-        {
-            Serial.println("Swapping GPS ports...\r\n");
-            SerialGPSTmp = SerialGPS;
-            SerialGPS = SerialGPS2;
-            SerialGPS2 = SerialGPSTmp;
-            PortSwapTime = systick_millis_count;
-        }
-    }
+    // if ( !useUM982 ){
+    //     if (GGA_Available == false && !passThroughGPS && !passThroughGPS2)
+    //     {
+    //         if (systick_millis_count - PortSwapTime >= 10000)
+    //         {
+    //             Serial.println("Swapping GPS ports...\r\n");
+    //             SerialGPSTmp = SerialGPS;
+    //             SerialGPS = SerialGPS2;
+    //             SerialGPS2 = SerialGPSTmp;
+    //             PortSwapTime = systick_millis_count;
+    //         }
+    //     }
+    // }
 
-    // Pass NTRIP etc to GPS
-    if (SerialAOG.available())
-    {
-        uint8_t incoming_char = SerialAOG.read();
+    // // Pass NTRIP etc to GPS
+    // if (!useUM982){
+    //     if (SerialAOG.available())
+    //     {
+    //         uint8_t incoming_char = SerialAOG.read();
 
-        // Check incoming char against the aogSerialCmd array
-        // The configuration utility will send !AOGR1, !AOGR2 or !AOGED (close/end)
-        if (aogSerialCmdCounter < 4 && aogSerialCmd[aogSerialCmdCounter] == incoming_char)
-        {
-            aogSerialCmdBuffer[aogSerialCmdCounter] = incoming_char;
-            aogSerialCmdCounter++;
-        }
-        // Whole command prefix is in, handle it
-        else if (aogSerialCmdCounter == 4)
-        {
-            aogSerialCmdBuffer[aogSerialCmdCounter] = incoming_char;
-            aogSerialCmdBuffer[aogSerialCmdCounter + 1] = SerialAOG.read();
+    //         // Check incoming char against the aogSerialCmd array
+    //         // The configuration utility will send !AOGR1, !AOGR2 or !AOGED (close/end)
+    //         if (aogSerialCmdCounter < 4 && aogSerialCmd[aogSerialCmdCounter] == incoming_char)
+    //         {
+    //             aogSerialCmdBuffer[aogSerialCmdCounter] = incoming_char;
+    //             aogSerialCmdCounter++;
+    //         }
+    //         // Whole command prefix is in, handle it
+    //         else if (aogSerialCmdCounter == 4)
+    //         {
+    //             aogSerialCmdBuffer[aogSerialCmdCounter] = incoming_char;
+    //             aogSerialCmdBuffer[aogSerialCmdCounter + 1] = SerialAOG.read();
 
-            if (aogSerialCmdBuffer[aogSerialCmdCounter] == 'R')
-            {
-                HardwareSerial* autoBaudSerial = NULL;
+    //             if (aogSerialCmdBuffer[aogSerialCmdCounter] == 'R')
+    //             {
+    //                 HardwareSerial* autoBaudSerial = NULL;
 
-                // Reset SerialGPS and SerialGPS2
-                SerialGPS = &Serial7;
-                SerialGPS2 = &Serial2;
+    //                 // Reset SerialGPS and SerialGPS2
+    //                 SerialGPS = &Serial7;
+    //                 SerialGPS2 = &Serial2;
 
-                if (aogSerialCmdBuffer[aogSerialCmdCounter + 1] == '1')
-                {
-                    passThroughGPS = true;
-                    passThroughGPS2 = false;
-                    autoBaudSerial = SerialGPS;
-                }
-                else if (aogSerialCmdBuffer[aogSerialCmdCounter + 1] == '2')
-                {
-                    passThroughGPS = false;
-                    passThroughGPS2 = true;
-                    autoBaudSerial = SerialGPS2;
-                }
-				
-				const uint8_t UBX_SYNCH_1 = 0xB5;
-                const uint8_t UBX_SYNCH_2 = 0x62;
-                const uint8_t UBX_CLASS_ACK = 0x05;
-                const uint8_t UBX_CLASS_CFG = 0x06;
-                const uint8_t UBX_CFG_RATE = 0x08;
+    //                 if (aogSerialCmdBuffer[aogSerialCmdCounter + 1] == '1')
+    //                 {
+    //                     passThroughGPS = true;
+    //                     passThroughGPS2 = false;
+    //                     autoBaudSerial = SerialGPS;
+    //                 }
+    //                 else if (aogSerialCmdBuffer[aogSerialCmdCounter + 1] == '2')
+    //                 {
+    //                     passThroughGPS = false;
+    //                     passThroughGPS2 = true;
+    //                     autoBaudSerial = SerialGPS2;
+    //                 }
+                    
+    //                 const uint8_t UBX_SYNCH_1 = 0xB5;
+    //                 const uint8_t UBX_SYNCH_2 = 0x62;
+    //                 const uint8_t UBX_CLASS_ACK = 0x05;
+    //                 const uint8_t UBX_CLASS_CFG = 0x06;
+    //                 const uint8_t UBX_CFG_RATE = 0x08;
 
-                ubxPacket packetCfg{};
+    //                 ubxPacket packetCfg{};
 
-                packetCfg.cls = UBX_CLASS_CFG;
-                packetCfg.id = UBX_CFG_RATE;
-                packetCfg.len = 0;
-                packetCfg.startingSpot = 0;
+    //                 packetCfg.cls = UBX_CLASS_CFG;
+    //                 packetCfg.id = UBX_CFG_RATE;
+    //                 packetCfg.len = 0;
+    //                 packetCfg.startingSpot = 0;
 
-                calcChecksum(&packetCfg);
+    //                 calcChecksum(&packetCfg);
 
-                byte mon_rate[] = {0xB5, 0x62, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-                mon_rate[2] = packetCfg.cls; 
-                mon_rate[3] = packetCfg.id; 
-                mon_rate[4] = packetCfg.len & 0xFF; 
-                mon_rate[5] = packetCfg.len >> 8;
-                mon_rate[6] = packetCfg.checksumA; 
-                mon_rate[7] = packetCfg.checksumB; 
+    //                 byte mon_rate[] = {0xB5, 0x62, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    //                 mon_rate[2] = packetCfg.cls; 
+    //                 mon_rate[3] = packetCfg.id; 
+    //                 mon_rate[4] = packetCfg.len & 0xFF; 
+    //                 mon_rate[5] = packetCfg.len >> 8;
+    //                 mon_rate[6] = packetCfg.checksumA; 
+    //                 mon_rate[7] = packetCfg.checksumB; 
 
-                // Check baudrate
-                bool communicationSuccessfull = false;
-				uint32_t baudrate = 0;                
+    //                 // Check baudrate
+    //                 bool communicationSuccessfull = false;
+    //                 uint32_t baudrate = 0;                
 
-				for (uint32_t i = 0; i < nrBaudrates; i++)
-				{
-					baudrate = baudrates[i];
+    //                 for (uint32_t i = 0; i < nrBaudrates; i++)
+    //                 {
+    //                     baudrate = baudrates[i];
 
-					Serial.print(F("Checking baudrate: "));
-					Serial.println(baudrate);
+    //                     Serial.print(F("Checking baudrate: "));
+    //                     Serial.println(baudrate);
 
-					autoBaudSerial->begin(baudrate);
-					delay(100);
+    //                     autoBaudSerial->begin(baudrate);
+    //                     delay(100);
 
-					// first send dumb data to make sure its on
-					autoBaudSerial->write(0xFF);
+    //                     // first send dumb data to make sure its on
+    //                     autoBaudSerial->write(0xFF);
 
-					// Clear
-					while (autoBaudSerial->available() > 0)
-					{
-						autoBaudSerial->read();
-					}
+    //                     // Clear
+    //                     while (autoBaudSerial->available() > 0)
+    //                     {
+    //                         autoBaudSerial->read();
+    //                     }
 
-					// Send request
-					autoBaudSerial->write(mon_rate, 8);
+    //                     // Send request
+    //                     autoBaudSerial->write(mon_rate, 8);
 
-					uint32_t millis_read = systick_millis_count;
-					constexpr uint32_t UART_TIMEOUT = 1000;
-					int ubxFrameCounter = 0;
-					bool isUbx = false;
-					uint8_t incoming = 0;
+    //                     uint32_t millis_read = systick_millis_count;
+    //                     constexpr uint32_t UART_TIMEOUT = 1000;
+    //                     int ubxFrameCounter = 0;
+    //                     bool isUbx = false;
+    //                     uint8_t incoming = 0;
 
-					uint8_t requestedClass = packetCfg.cls;
-					uint8_t requestedID = packetCfg.id;
+    //                     uint8_t requestedClass = packetCfg.cls;
+    //                     uint8_t requestedID = packetCfg.id;
 
-					uint8_t packetBufCls = 0;
-					uint8_t packetBufId = 0;
+    //                     uint8_t packetBufCls = 0;
+    //                     uint8_t packetBufId = 0;
 
-					do
-					{
-						while (autoBaudSerial->available() > 0)
-						{
-							incoming = autoBaudSerial->read();
+    //                     do
+    //                     {
+    //                         while (autoBaudSerial->available() > 0)
+    //                         {
+    //                             incoming = autoBaudSerial->read();
 
-							if (!isUbx && incoming == UBX_SYNCH_1) // UBX binary frames start with 0xB5, aka μ
-							{
-								ubxFrameCounter = 0;
-								isUbx = true;
-							}
+    //                             if (!isUbx && incoming == UBX_SYNCH_1) // UBX binary frames start with 0xB5, aka μ
+    //                             {
+    //                                 ubxFrameCounter = 0;
+    //                                 isUbx = true;
+    //                             }
 
-							if (isUbx)
-							{
-								// Decide what type of response this is
-								if ((ubxFrameCounter == 0) && (incoming != UBX_SYNCH_1))      // ISO 'μ'
-								{
-									isUbx = false;                                            // Something went wrong. Reset.
-								}
-								else if ((ubxFrameCounter == 1) && (incoming != UBX_SYNCH_2)) // ASCII 'b'
-								{
-									isUbx = false;                                            // Something went wrong. Reset.
-								}
-								else if (ubxFrameCounter == 1 && incoming == UBX_SYNCH_2)
-								{
-									// Serial.println("UBX_SYNCH_2");
-									// isUbx should be still true
-								}
-								else if (ubxFrameCounter == 2) // Class
-								{
-									// Record the class in packetBuf until we know what to do with it
-									packetBufCls = incoming; // (Duplication)
-								}
-								else if (ubxFrameCounter == 3) // ID
-								{
-									// Record the ID in packetBuf until we know what to do with it
-									packetBufId = incoming; // (Duplication)
+    //                             if (isUbx)
+    //                             {
+    //                                 // Decide what type of response this is
+    //                                 if ((ubxFrameCounter == 0) && (incoming != UBX_SYNCH_1))      // ISO 'μ'
+    //                                 {
+    //                                     isUbx = false;                                            // Something went wrong. Reset.
+    //                                 }
+    //                                 else if ((ubxFrameCounter == 1) && (incoming != UBX_SYNCH_2)) // ASCII 'b'
+    //                                 {
+    //                                     isUbx = false;                                            // Something went wrong. Reset.
+    //                                 }
+    //                                 else if (ubxFrameCounter == 1 && incoming == UBX_SYNCH_2)
+    //                                 {
+    //                                     // Serial.println("UBX_SYNCH_2");
+    //                                     // isUbx should be still true
+    //                                 }
+    //                                 else if (ubxFrameCounter == 2) // Class
+    //                                 {
+    //                                     // Record the class in packetBuf until we know what to do with it
+    //                                     packetBufCls = incoming; // (Duplication)
+    //                                 }
+    //                                 else if (ubxFrameCounter == 3) // ID
+    //                                 {
+    //                                     // Record the ID in packetBuf until we know what to do with it
+    //                                     packetBufId = incoming; // (Duplication)
 
-									// We can now identify the type of response
-									// If the packet we are receiving is not an ACK then check for a class and ID match
-									if (packetBufCls != UBX_CLASS_ACK)
-									{
-										// This is not an ACK so check for a class and ID match
-										if ((packetBufCls == requestedClass) && (packetBufId == requestedID))
-										{
-											// This is not an ACK and we have a class and ID match
-											communicationSuccessfull = true;
-										}
-										else
-										{
-											// This is not an ACK and we do not have a class and ID match
-											// so we should keep diverting data into packetBuf and ignore the payload
-											isUbx = false;
-										}
-									}
-								}
-							}
+    //                                     // We can now identify the type of response
+    //                                     // If the packet we are receiving is not an ACK then check for a class and ID match
+    //                                     if (packetBufCls != UBX_CLASS_ACK)
+    //                                     {
+    //                                         // This is not an ACK so check for a class and ID match
+    //                                         if ((packetBufCls == requestedClass) && (packetBufId == requestedID))
+    //                                         {
+    //                                             // This is not an ACK and we have a class and ID match
+    //                                             communicationSuccessfull = true;
+    //                                         }
+    //                                         else
+    //                                         {
+    //                                             // This is not an ACK and we do not have a class and ID match
+    //                                             // so we should keep diverting data into packetBuf and ignore the payload
+    //                                             isUbx = false;
+    //                                         }
+    //                                     }
+    //                                 }
+    //                             }
 
-							// Finally, increment the frame counter
-							ubxFrameCounter++;
-						}
-					} while (systick_millis_count - millis_read < UART_TIMEOUT);
+    //                             // Finally, increment the frame counter
+    //                             ubxFrameCounter++;
+    //                         }
+    //                     } while (systick_millis_count - millis_read < UART_TIMEOUT);
 
-					if (communicationSuccessfull)
-					{
-						break;
-					}
-				}
+    //                     if (communicationSuccessfull)
+    //                     {
+    //                         break;
+    //                     }
+    //                 }
 
-				if (communicationSuccessfull)
-				{
-					SerialAOG.write(aogSerialCmdBuffer, 6);
-					SerialAOG.print(F("Found reciever at baudrate: "));
-					SerialAOG.println(baudrate);
+    //                 if (communicationSuccessfull)
+    //                 {
+    //                     SerialAOG.write(aogSerialCmdBuffer, 6);
+    //                     SerialAOG.print(F("Found reciever at baudrate: "));
+    //                     SerialAOG.println(baudrate);
 
-					// Let the configuring program know it can proceed
-					SerialAOG.println("!AOGOK");
-				}
-				else
-				{
-					SerialAOG.println(F("u-blox GNSS not detected. Please check wiring."));
-				}
+    //                     // Let the configuring program know it can proceed
+    //                     SerialAOG.println("!AOGOK");
+    //                 }
+    //                 else
+    //                 {
+    //                     SerialAOG.println(F("u-blox GNSS not detected. Please check wiring."));
+    //                 }
 
-				aogSerialCmdCounter = 0;
-			}
-            // END command. maybe think of a different abbreviation
-            else if (aogSerialCmdBuffer[aogSerialCmdCounter] == 'E' && aogSerialCmdBuffer[aogSerialCmdCounter + 1] == 'D')
-            {
-                passThroughGPS = false;
-                passThroughGPS2 = false;
-                aogSerialCmdCounter = 0;
-            }
-        }
-        else
-        {
-            aogSerialCmdCounter = 0;
-		}
+    //                 aogSerialCmdCounter = 0;
+    //             }
+    //             // END command. maybe think of a different abbreviation
+    //             else if (aogSerialCmdBuffer[aogSerialCmdCounter] == 'E' && aogSerialCmdBuffer[aogSerialCmdCounter + 1] == 'D')
+    //             {
+    //                 passThroughGPS = false;
+    //                 passThroughGPS2 = false;
+    //                 aogSerialCmdCounter = 0;
+    //             }
+    //         }
+    //         else
+    //         {
+    //             aogSerialCmdCounter = 0;
+    //         }
 
-        if (passThroughGPS)
-        {
-            SerialGPS->write(incoming_char);
-        }
-        else if (passThroughGPS2)
-        {
-            SerialGPS2->write(incoming_char);
-        }
-        else
-        {
-            SerialGPS->write(incoming_char);
-        }
-    }
-
+    //         if (passThroughGPS)
+    //         {
+    //             SerialGPS->write(incoming_char);
+    //         }
+    //         else if (passThroughGPS2)
+    //         {
+    //             SerialGPS2->write(incoming_char);
+    //         }
+    //         else
+    //         {
+    //             SerialGPS->write(incoming_char);
+    //         }
+    //     }
+    // }
     // Read incoming nmea from GPS
     if (SerialGPS->available())
     {
         if (passThroughGPS)
         {
-            SerialAOG.write(SerialGPS->read());
+          SerialAOG.write(SerialGPS->read());
         }
         else
         {
-            parser << SerialGPS->read();
+          parser << SerialGPS->read();
+        //     if ( !useUM982 ){
+        //     parser << SerialGPS->read();
+        //     }
+        //     else {
+        //         gpsInchar = SerialGPS->read();
+        //         parser << gpsInchar;
+        //         umparser << gpsInchar;
+        //         }
         }
     }
 
@@ -612,7 +650,9 @@ void loop()
     }
 
     // If both dual messages are ready, send to AgOpen
-    if (dualReadyGGA == true && dualReadyRelPos == true)
+    //Serial.print(dualReadyGGA);
+    //Serial.println(dualReadyRelPos);
+    if (dualReadyGGA == true && dualReadyRelPos == true )
     {
         BuildNmea();
         dualReadyGGA = false;
@@ -620,60 +660,61 @@ void loop()
     }
 
     // If anything comes in SerialGPS2 RelPos data
-    if (SerialGPS2->available())
-    {
-        uint8_t incoming_char = SerialGPS2->read();  //Read RELPOSNED from F9P
+    if ( !useUM982 ){
+        if (SerialGPS2->available())
+        {
+            uint8_t incoming_char = SerialGPS2->read();  //Read RELPOSNED from F9P
 
-        if (passThroughGPS2)
-        {
-            SerialAOG.write(incoming_char);
-        }
-        else
-        {
-            // Just increase the byte counter for the first 3 bytes
-            if (relposnedByteCount < 4 && incoming_char == ackPacket[relposnedByteCount])
+            if (passThroughGPS2)
             {
-                relposnedByteCount++;
-            }
-            else if (relposnedByteCount > 3)
-            {
-                // Real data, put the received bytes in the buffer
-                ackPacket[relposnedByteCount] = incoming_char;
-                relposnedByteCount++;
+                SerialAOG.write(incoming_char);
             }
             else
             {
-                // Reset the counter, becaues the start sequence was broken
-                relposnedByteCount = 0;
+                // Just increase the byte counter for the first 3 bytes
+                if (relposnedByteCount < 4 && incoming_char == ackPacket[relposnedByteCount])
+                {
+                    relposnedByteCount++;
+                }
+                else if (relposnedByteCount > 3)
+                {
+                    // Real data, put the received bytes in the buffer
+                    ackPacket[relposnedByteCount] = incoming_char;
+                    relposnedByteCount++;
+                }
+                else
+                {
+                    // Reset the counter, becaues the start sequence was broken
+                    relposnedByteCount = 0;
+                }
             }
         }
-    }
-
-    // Check the message when the buffer is full
-    if (relposnedByteCount > 71)
-    {
-        if (calcChecksum())
+    
+        // Check the message when the buffer is full
+        if (relposnedByteCount > 71)
         {
-            //if(deBug) Serial.println("RelPos Message Recived");
-            digitalWrite(GPSRED_LED, LOW);   //Turn red GPS LED OFF (we are now in dual mode so green LED)
-            useDual = true;
-            relPosDecode();
+            if (calcChecksum())
+            {
+                //if(deBug) Serial.println("RelPos Message Recived");
+                digitalWrite(GPSRED_LED, LOW);   //Turn red GPS LED OFF (we are now in dual mode so green LED)
+                useDual = true;
+                relPosDecode();
+            }
+            /*  else {
+            if(deBug) Serial.println("ACK Checksum Failure: ");
+            }
+            */
+            relposnedByteCount = 0;
         }
-        /*  else {
-          if(deBug) Serial.println("ACK Checksum Failure: ");
-          }
-        */
-        relposnedByteCount = 0;
     }
-
-    //GGA timeout, turn off GPS LED's etc
-    if((systick_millis_count - gpsReadyTime) > 10000) //GGA age over 10sec
-    {
-      digitalWrite(GPSRED_LED, LOW);
-      digitalWrite(GPSGREEN_LED, LOW);
-      useDual = false;
-    }
-
+        //GGA timeout, turn off GPS LED's etc
+        if((systick_millis_count - gpsReadyTime) > 10000) //GGA age over 10sec
+        {
+        digitalWrite(GPSRED_LED, LOW);
+        digitalWrite(GPSGREEN_LED, LOW);
+        useDual = false;
+        }
+    
     //Read BNO
     if((systick_millis_count - READ_BNO_TIME) > REPORT_INTERVAL && useBNO08x)
     {
