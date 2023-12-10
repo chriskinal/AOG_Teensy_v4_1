@@ -245,9 +245,9 @@ bool sendUSB = true;
 bool useUM982 = true;
 //#include "calc_crc32.h"
 //#include "UM982_Parser.h"
-#include "zSmoothed.h"
+//#include "zSmoothed.h"
 
-Smoothed <float> smoothRoll;
+//Smoothed <float> smoothRoll;
 
 //UM982Parser<4> umparser;
 /****************************************************************/
