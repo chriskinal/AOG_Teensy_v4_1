@@ -243,6 +243,12 @@ bool sendUSB = true;
 /*****************************************************************/
 // UM982 Support
 bool useUM982 = true;
+bool udpPassthrough = true;
+bool gotCR = false;
+bool gotLF = false;
+bool gotDollar = false;
+char msgBuf[100];
+int msgBufLen = 0;
 //#include "calc_crc32.h"
 //#include "UM982_Parser.h"
 //#include "zSmoothed.h"
@@ -278,7 +284,7 @@ void setup()
 
   // UM982 Support
   useDual = true;
-  smoothRoll.begin(SMOOTHED_AVERAGE, 10);
+  //smoothRoll.begin(SMOOTHED_AVERAGE, 10);
   // if (useUM982){
     // umparser.setErrorHandler(errorHandler);
     // umparser.addHandler("UNIHEADINGA", UNIHEADINGA_Handler);
@@ -628,17 +634,44 @@ void loop()
         {
           SerialAOG.write(SerialGPS->read());
         }
+        else if (useUM982 && udpPassthrough)
+        {
+            char mChar;
+            mChar << SerialGPS->read();
+            switch (mChar){
+                case '$':
+                msgBuf[msgBufLen] = mChar;
+                msgBufLen ++;
+                gotDollar = true;
+                case '\r':
+                gotCR = true;
+                gotDollar = false;
+                case '\n':
+                gotLF = true;
+                gotDollar = false;
+                default:
+                if (gotDollar)
+                    {
+                    msgBuf[msgBufLen] = mChar;
+                    msgBufLen ++;
+                    }
+                break;
+            }
+            if ( gotCR && gotLF )
+                {
+                    Eth_udpPAOGI.beginPacket(Eth_ipDestination, portDestination);
+                    Eth_udpPAOGI.write(msgBuf, msgBufLen - 1);
+                    Eth_udpPAOGI.endPacket();
+                    gotCR = false;
+                    gotLF = false;
+                    gotDollar = false;
+                    memset( msgBuf, 0, msgBufLen);
+                    msgBufLen = 0;
+                }
+        }
         else
         {
           parser << SerialGPS->read();
-        //     if ( !useUM982 ){
-        //     parser << SerialGPS->read();
-        //     }
-        //     else {
-        //         gpsInchar = SerialGPS->read();
-        //         parser << gpsInchar;
-        //         umparser << gpsInchar;
-        //         }
         }
     }
 
@@ -655,6 +688,7 @@ void loop()
     //Serial.println(dualReadyRelPos);
     if (dualReadyGGA == true && dualReadyRelPos == true )
     {
+        imuHandler();
         BuildNmea();
         dualReadyGGA = false;
         dualReadyRelPos = false;
