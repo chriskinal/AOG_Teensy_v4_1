@@ -247,8 +247,9 @@ bool udpPassthrough = true;
 bool gotCR = false;
 bool gotLF = false;
 bool gotDollar = false;
-char msgBuf[100];
+char msgBuf[254];
 int msgBufLen = 0;
+//char mChar;
 //#include "calc_crc32.h"
 //#include "UM982_Parser.h"
 //#include "zSmoothed.h"
@@ -636,38 +637,77 @@ void loop()
         }
         else if (useUM982 && udpPassthrough)
         {
-            char mChar;
-            mChar << SerialGPS->read();
-            switch (mChar){
+            //char mChar;
+            char incoming = SerialGPS->read();
+            //Serial.println(incoming);
+            switch (incoming) {
                 case '$':
-                msgBuf[msgBufLen] = mChar;
+                msgBuf[msgBufLen] = incoming;
                 msgBufLen ++;
                 gotDollar = true;
+                break;
                 case '\r':
+                msgBuf[msgBufLen] = incoming;
+                msgBufLen ++;
                 gotCR = true;
                 gotDollar = false;
+                break;
                 case '\n':
+                msgBuf[msgBufLen] = incoming;
+                msgBufLen ++;
                 gotLF = true;
                 gotDollar = false;
+                break;
                 default:
                 if (gotDollar)
                     {
-                    msgBuf[msgBufLen] = mChar;
+                    msgBuf[msgBufLen] = incoming;
                     msgBufLen ++;
                     }
                 break;
             }
-            if ( gotCR && gotLF )
-                {
-                    Eth_udpPAOGI.beginPacket(Eth_ipDestination, portDestination);
-                    Eth_udpPAOGI.write(msgBuf, msgBufLen - 1);
-                    Eth_udpPAOGI.endPacket();
-                    gotCR = false;
-                    gotLF = false;
-                    gotDollar = false;
-                    memset( msgBuf, 0, msgBufLen);
-                    msgBufLen = 0;
-                }
+            if (gotCR && gotLF){
+                Serial.println(msgBuf);
+                Serial.println(msgBufLen);
+                Eth_udpPAOGI.beginPacket(Eth_ipDestination, portDestination);
+                Eth_udpPAOGI.write(msgBuf, msgBufLen);
+                Eth_udpPAOGI.endPacket();
+                gotCR = false;
+                gotLF = false;
+                gotDollar = false;
+                memset( msgBuf, 0, msgBufLen);
+                msgBufLen = 0;
+            }
+            // switch (mChar){
+            //     case '$':
+            //     msgBuf[msgBufLen] = mChar;
+            //     msgBufLen ++;
+            //     gotDollar = true;
+            //     case '\r':
+            //     gotCR = true;
+            //     gotDollar = false;
+            //     case '\n':
+            //     gotLF = true;
+            //     gotDollar = false;
+            //     default:
+            //     if (gotDollar)
+            //         {
+            //         msgBuf[msgBufLen] = mChar;
+            //         msgBufLen ++;
+            //         }
+            //     break;
+            // }
+            // if ( gotCR && gotLF )
+            //     {
+            //         Eth_udpPAOGI.beginPacket(Eth_ipDestination, portDestination);
+            //         Eth_udpPAOGI.write(msgBuf, msgBufLen - 1);
+            //         Eth_udpPAOGI.endPacket();
+            //         gotCR = false;
+            //         gotLF = false;
+            //         gotDollar = false;
+            //         memset( msgBuf, 0, msgBufLen);
+            //         msgBufLen = 0;
+            //     }
         }
         else
         {
