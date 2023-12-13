@@ -242,8 +242,8 @@ bool sendUSB = true;
 
 /*****************************************************************/
 // UM982 Support
-bool useUM982 = true;
-bool udpPassthrough = true;
+bool useUM982 = true; // GPS neeeds to send GGA, VTG & HPR messages only if this "true" and udpPassthrough is "false".
+bool udpPassthrough = false; // GPS needs send GGA and KSXT messages only if useUM982 and this are both "true".
 bool gotCR = false;
 bool gotLF = false;
 bool gotDollar = false;
@@ -667,47 +667,20 @@ void loop()
                 break;
             }
             if (gotCR && gotLF){
-                Serial.println(msgBuf);
-                Serial.println(msgBufLen);
-                Eth_udpPAOGI.beginPacket(Eth_ipDestination, portDestination);
-                Eth_udpPAOGI.write(msgBuf, msgBufLen);
-                Eth_udpPAOGI.endPacket();
+                //Serial.print(msgBuf);
+                //Serial.println(msgBufLen);
+                if (sendUSB) { SerialAOG.write(msgBuf); } // Send USB GPS data if enabled in user settings
+                if (Ethernet_running){
+                    Eth_udpPAOGI.beginPacket(Eth_ipDestination, portDestination);
+                    Eth_udpPAOGI.write(msgBuf, msgBufLen);
+                    Eth_udpPAOGI.endPacket();
+                }
                 gotCR = false;
                 gotLF = false;
                 gotDollar = false;
-                memset( msgBuf, 0, msgBufLen);
+                memset( msgBuf, 0, 254 );
                 msgBufLen = 0;
             }
-            // switch (mChar){
-            //     case '$':
-            //     msgBuf[msgBufLen] = mChar;
-            //     msgBufLen ++;
-            //     gotDollar = true;
-            //     case '\r':
-            //     gotCR = true;
-            //     gotDollar = false;
-            //     case '\n':
-            //     gotLF = true;
-            //     gotDollar = false;
-            //     default:
-            //     if (gotDollar)
-            //         {
-            //         msgBuf[msgBufLen] = mChar;
-            //         msgBufLen ++;
-            //         }
-            //     break;
-            // }
-            // if ( gotCR && gotLF )
-            //     {
-            //         Eth_udpPAOGI.beginPacket(Eth_ipDestination, portDestination);
-            //         Eth_udpPAOGI.write(msgBuf, msgBufLen - 1);
-            //         Eth_udpPAOGI.endPacket();
-            //         gotCR = false;
-            //         gotLF = false;
-            //         gotDollar = false;
-            //         memset( msgBuf, 0, msgBufLen);
-            //         msgBufLen = 0;
-            //     }
         }
         else
         {
