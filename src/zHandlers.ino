@@ -128,7 +128,7 @@ void HPR_Handler()
   parser.getArg(2, umRoll);
   //smoothRoll.add(atof(umRoll));
   //rollDual = smoothRoll.get();
-  //rollDual = atof(umRoll);
+  rollDual = atof(umRoll);
 }
 
 void readBNO()
