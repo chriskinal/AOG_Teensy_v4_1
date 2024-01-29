@@ -8,6 +8,10 @@
 // Teensy Serial 2 TX (8) to F9P Heading receiver RX1
 // F9P Position receiver TX2 to F9P Heading receiver RX2 (RTCM data for Moving Base)
 //
+// UM982 Connection plan:
+// Teensy Serial 7 RX (28) to F9P Position receiver TX1 (Position data)
+// Teensy Serial 7 TX (29) to F9P Position receiver RX1 (RTCM data for RTK)
+//
 // Configuration of receiver
 // Position F9P
 // CFG-RATE-MEAS - 100 ms -> 10 Hz
@@ -67,14 +71,12 @@ const bool invertRoll= true;  //Used for IMU with dual antenna
 uint32_t READ_BNO_TIME = 0;   //Used stop BNO data pile up (This version is without resetting BNO everytime)
 
 //Status LED's
-//#define GGAReceivedLED 13         //Teensy onboard LED
 #define GGAReceivedLED 13         //Teensy onboard LED
-#define Power_on_LED 5            //Green
-#define Ethernet_Active_LED 6     //Blue
-#define GPSRED_LED 9              //Yellow (Flashing = NO IMU or Dual, ON = GPS fix with IMU)
-#define GPSGREEN_LED 11           //Red (Flashing = Dual bad, ON = Dual good)
-//#define AUTOSTEER_STANDBY_LED 11  //Red
-#define AUTOSTEER_STANDBY_LED 13  //Red
+#define Power_on_LED 5            //Red
+#define Ethernet_Active_LED 6     //Green
+#define GPSRED_LED 9              //Red (Flashing = NO IMU or Dual, ON = GPS fix with IMU)
+#define GPSGREEN_LED 10           //Green (Flashing = Dual bad, ON = Dual good)
+#define AUTOSTEER_STANDBY_LED 11  //Red
 #define AUTOSTEER_ACTIVE_LED 12   //Green
 uint32_t gpsReadyTime = 0;        //Used for GGA timeout
 
@@ -202,6 +204,7 @@ float pitch = 0;
 float yaw = 0;
 
 //Fusing BNO with Dual
+bool baseLineCheck = true; //Set to true to use IMU fusion with daul GPS
 double rollDelta;
 double rollDeltaSmooth;
 double correctionHeading;
@@ -243,20 +246,12 @@ bool sendUSB = true;
 /*****************************************************************/
 // UM982 Support
 bool useUM982 = true; // GPS neeeds to send GGA, VTG & HPR messages only if this "true" and udpPassthrough is "false".
-bool udpPassthrough = false; // GPS needs send GGA and KSXT messages only if useUM982 and this are both "true".
+bool udpPassthrough = false; // GPS needs send KSXT messages only if useUM982 and this are both "true".
 bool gotCR = false;
 bool gotLF = false;
 bool gotDollar = false;
 char msgBuf[254];
 int msgBufLen = 0;
-//char mChar;
-//#include "calc_crc32.h"
-//#include "UM982_Parser.h"
-//#include "zSmoothed.h"
-
-//Smoothed <float> smoothRoll;
-
-//UM982Parser<4> umparser;
 /****************************************************************/
 
 // Setup procedure ---------------------------------------------------------------------------------------------------------------
@@ -275,23 +270,12 @@ void setup()
   pinMode(AUTOSTEER_STANDBY_LED, OUTPUT);
   pinMode(AUTOSTEER_ACTIVE_LED, OUTPUT);
 
-  // digitalWrite(Power_on_LED, 1);
   // the dash means wildcard
  
   parser.setErrorHandler(errorHandler);
   parser.addHandler("G-GGA", GGA_Handler);
   parser.addHandler("G-VTG", VTG_Handler);
   parser.addHandler("G-HPR", HPR_Handler);
-
-  // UM982 Support
-  useDual = true;
-  //smoothRoll.begin(SMOOTHED_AVERAGE, 10);
-  // if (useUM982){
-    // umparser.setErrorHandler(errorHandler);
-    // umparser.addHandler("UNIHEADINGA", UNIHEADINGA_Handler);
-    // umparser.addHandler("BESTNAVXYZA", BESTNAVXYZA_Handler);
-    // umparser.addHandler("BESTNAVXYZHA", BESTNAVXYZHA_Handler);
-  // }
 
   delay(10);
   Serial.begin(baudAOG);

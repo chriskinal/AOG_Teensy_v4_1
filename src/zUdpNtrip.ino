@@ -12,12 +12,7 @@ void udpNtrip()
   if (packetLength > 0)
   {
     Eth_udpNtrip.read(Eth_NTRIP_packetBuffer, packetLength);
-    if ( !useUM982 ){
-      SerialGPS2->write(Eth_NTRIP_packetBuffer, packetLength);
-    }
-    else{
-    SerialGPS->write(Eth_NTRIP_packetBuffer, packetLength);  
-    }
+    SerialGPS->write(Eth_NTRIP_packetBuffer, packetLength);
   }
- #endif
+#endif
 }
