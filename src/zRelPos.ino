@@ -1,4 +1,5 @@
 
+//fusion branch
 void relPosDecode() {
 
     int carrSoln;
