@@ -1,4 +1,3 @@
-
 void relPosDecode() {
 
     int carrSoln;
