@@ -31,6 +31,27 @@ char imuRoll[6];
 char imuPitch[6];
 char imuYawRate[6];
 
+// SXT
+char kUtc[18];
+char kLon[13];
+char kLat[14];
+char kHeight[11];
+char kHeading[7];
+char kPitch[7];
+char kTrack[7];
+char kVel[8];
+char kRoll[7];
+char kPosq[2];
+char kHeadq[2];
+char kSsv[3];
+char kMsv[3];
+char kEast[8];
+char kNorth[8];
+char kUp[8];
+char kEastV[8];
+char kNorthV[8];
+char kUpV[8];
+
 // If odd characters showed up.
 void errorHandler()
 {
@@ -156,6 +177,118 @@ void HPR_Handler()
            dualReadyRelPos = true;   //RelPos ready is true so PAOGI will send when the GGA is also ready
        }
     }
+}
+
+void SXT_Handler()
+{
+    // fix time
+    parser.getArg(0, fixTime);
+
+    // latitude
+    parser.getArg(1, latitude);
+    parser.getArg(2, latNS);
+
+    // longitude
+    parser.getArg(3, longitude);
+    parser.getArg(4, lonEW);
+
+    // fix quality
+    parser.getArg(5, fixQuality);
+
+    // satellite #
+    parser.getArg(6, numSats);
+
+    // HDOP
+    parser.getArg(7, HDOP);
+
+    // altitude
+    parser.getArg(8, altitude);
+
+    // time of last DGPS update
+    parser.getArg(12, ageDGPS);
+
+    if (blink)
+    {
+        digitalWrite(GGAReceivedLED, HIGH);
+    }
+    else
+    {
+        digitalWrite(GGAReceivedLED, LOW);
+    }
+
+    blink = !blink;
+    GGA_Available = true;
+
+    if (useUM982){useDual = true;}
+
+    if (useDual)
+    {
+       dualReadyGGA = true;
+    }
+
+    if (useBNO08x || useCMPS)
+    {
+       imuHandler();          //Get IMU data ready
+       BuildNmea();           //Build & send data GPS data to AgIO (Both Dual & Single)
+       dualReadyGGA = false;  //Force dual GGA ready false because we just sent it to AgIO based off the IMU data
+       if (!useDual)
+       {
+        digitalWrite(GPSRED_LED, HIGH);    //Turn red GPS LED ON, we have GGA and must have a IMU     
+        digitalWrite(GPSGREEN_LED, LOW);   //Make sure the Green LED is OFF     
+       }
+    }
+    else if (!useBNO08x && !useCMPS && !useDual) 
+    {
+        digitalWrite(GPSRED_LED, blink);   //Flash red GPS LED, we have GGA but no IMU or dual
+        digitalWrite(GPSGREEN_LED, LOW);   //Make sure the Green LED is OFF
+        itoa(65535, imuHeading, 10);       //65535 is max value to stop AgOpen using IMU in Panda
+        BuildNmea();
+    }
+
+    gpsReadyTime = systick_millis_count;    //Used for GGA timeout (LED's ETC) 
+
+  // vtg Speed knots
+  parser.getArg(4, speedKnots);
+
+  //useDual = true;
+  dualReadyRelPos = true;
+  digitalWrite(GPSRED_LED, LOW);   //Turn red GPS LED OFF (we are now in dual mode so green LED)
+
+  // HPR Heading
+  parser.getArg(1, umHeading);
+  heading = atof(umHeading);
+
+  // HPR Substitute pitch for roll
+  if ( parser.getArg(2, umRoll) )
+  {
+    rollDual = atof(umRoll);
+    digitalWrite(GPSGREEN_LED, HIGH);   //Turn green GPS LED ON
+  }
+  else
+  {
+    digitalWrite(GPSGREEN_LED, blink);  //Flash the green GPS LED
+  }
+
+  // Solution quality factor
+  parser.getArg(4, solQuality);
+
+  if (solQuality >= 4)
+    {
+       if (useBNO08x || useCMPS)
+       {
+           if (baseLineCheck)
+           {
+               imuDualDelta();         //Find the error between latest IMU reading and this dual message
+           }
+           dualReadyRelPos = false;  //RelPos ready is false because we just saved the error for running from the IMU
+       }
+       else
+       {
+           imuHandler();             //No IMU so use dual data direct
+           dualReadyRelPos = true;   //RelPos ready is true so PAOGI will send when the GGA is also ready
+       }
+    }
+
 }
 
 void readBNO()
