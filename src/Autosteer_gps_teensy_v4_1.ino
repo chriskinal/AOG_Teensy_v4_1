@@ -8,6 +8,10 @@
 // Teensy Serial 2 TX (8) to F9P Heading receiver RX1
 // F9P Position receiver TX2 to F9P Heading receiver RX2 (RTCM data for Moving Base)
 //
+// UM982 Connection plan:
+// Teensy Serial 7 RX (28) to F9P Position receiver TX1 (Position data)
+// Teensy Serial 7 TX (29) to F9P Position receiver RX1 (RTCM data for RTK)
+//
 // Configuration of receiver
 // Position F9P
 // CFG-RATE-MEAS - 100 ms -> 10 Hz
