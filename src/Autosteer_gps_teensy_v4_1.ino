@@ -2,16 +2,34 @@
 // Teensy Serial 7 RX (28) to F9P Position receiver TX1 (Position data)
 // Teensy Serial 7 TX (29) to F9P Position receiver RX1 (RTCM data for RTK)
 //
+#include "zNMEAParser.h"
+#include <Wire.h>
+#include "BNO08x_AOG.h"
+#include <SimpleKalmanFilter.h>
+// Ethernet Options (Teensy 4.1 Only)
+#ifdef ARDUINO_TEENSY41
+#include <NativeEthernet.h>
+#include <NativeEthernetUdp.h>
+#endif // ARDUINO_TEENSY41
+
 /************************* User Settings *************************/
-bool useUM982 = true;         // GPS neeeds to send GGA, VTG & HPR messages only if this "true" and udpPassthrough is "false".
-bool udpPassthrough = false;  // GPS needs send KSXT messages only if useUM982 and this are both "true".
+bool udpPassthrough = false;  // False = GPS neeeds to send GGA, VTG & HPR messages. True = GPS needs to send KSXT messages only.
 bool makeOGI = false;         //Set to true to make PAOGI messages. Else PNADA message will be made.
 bool baseLineCheck = false;   //Set to true to use IMU fusion with UM982
-bool gotCR = false;
-bool gotLF = false;
-bool gotDollar = false;
-char msgBuf[254];
-int msgBufLen = 0;
+
+// Kalman Filtering
+// e_mea: Measurement Uncertainty - How much do we expect to our measurement vary
+// e_est: Estimation Uncertainty - Can be initilized with the same value as e_mea since the kalman filter will adjust its value.
+// q: Process Variance - usually a small number between 0.001 and 1 - how fast your measurement moves. Recommended 0.01. Should be tunned to your needs.
+bool filterRoll = false;
+float rollMEA = 1;
+float rollEST = 1;
+float rollQ = 0.01;
+
+bool filterHeading = false;
+float headingMEA = 1;
+float headingEST = 1;
+float headingQ = 0.01;
 
 // Serial Ports
 #define SerialAOG Serial                //AgIO USB conection
@@ -21,10 +39,23 @@ const int32_t baudAOG = 115200;         //USB connection speed
 const int32_t baudGPS = 460800;         //UM982 connection speed
 const int32_t baudRTK = 9600;           // most are using Xbee radios with default of 115200
 
+// Send data to AgIO via usb
+bool sendUSB = true;
+/************************* End User Settings *********************/
+
+SimpleKalmanFilter rollFilter(rollMEA, rollEST, rollQ);
+SimpleKalmanFilter headingFilter(headingMEA, headingEST, headingQ);
+
+bool gotCR = false;
+bool gotLF = false;
+bool gotDollar = false;
+char msgBuf[254];
+int msgBufLen = 0;
+
 #define ImuWire Wire        //SCL=19:A5 SDA=18:A4
 #define RAD_TO_DEG_X_10 572.95779513082320876798154814105
 
-//Swap BNO08x roll & ?
+//Swap BNO08x roll & pitch.
 //const bool swapRollPitch = false;
 
 const bool invertRoll= true;  //Used for IMU with dual antenna
@@ -56,11 +87,6 @@ void readBNO();
 void autosteerLoop();
 void ReceiveUdp();
 
-// Ethernet Options (Teensy 4.1 Only)
-#ifdef ARDUINO_TEENSY41
-#include <NativeEthernet.h>
-#include <NativeEthernetUdp.h>
-
 struct ConfigIP {
     uint8_t ipOne = 192;
     uint8_t ipTwo = 168;
@@ -85,7 +111,6 @@ EthernetUDP Eth_udpNtrip;     //In port 2233
 EthernetUDP Eth_udpAutoSteer; //In & Out Port 8888
 
 IPAddress Eth_ipDestination;
-#endif // ARDUINO_TEENSY41
 
 byte CK_A = 0;
 byte CK_B = 0;
@@ -95,22 +120,14 @@ int relposnedByteCount = 0;
 elapsedMillis speedPulseUpdateTimer = 0;
 byte velocityPWM_Pin = 36;      // Velocity (MPH speed) PWM pin
 
-#include "zNMEAParser.h"
-#include <Wire.h>
-#include "BNO08x_AOG.h"
-
 //Used to set CPU speed
 extern "C" uint32_t set_arm_clock(uint32_t frequency); // required prototype
 
 bool dualReadyGGA = false;
 bool dualReadyRelPos = false;
 
-// booleans to see if we are using CMPS or BNO08x
-bool useCMPS = false;
+// booleans to see if we are using BNO08x
 bool useBNO08x = false;
-
-//CMPS always x60
-#define CMPS14_ADDRESS 0x60
 
 // BNO08x address variables to check where it is
 const uint8_t bno08xAddresses[] = { 0x4A, 0x4B };
@@ -173,10 +190,6 @@ uint8_t aogSerialCmd[4] = { '!', 'A', 'O', 'G'};
 uint8_t aogSerialCmdBuffer[6];
 uint8_t aogSerialCmdCounter = 0;
 
-// Booleans to indictate to passthrough GPS or GPS2
-bool passThroughGPS = false;
-bool passThroughGPS2 = false;
-
 //-=-=-=-=- UBX binary specific variables
 struct ubxPacket
 {
@@ -193,13 +206,10 @@ struct ubxPacket
 	////sfe_ublox_packet_validity_e classAndIDmatch; // Goes from NOT_DEFINED to VALID or NOT_VALID when the Class and ID match the requestedClass and requestedID
 };
 
-// Send data to AgIO via usb
-bool sendUSB = true;
-
 // Setup procedure ---------------------------------------------------------------------------------------------------------------
 void setup()
 {
-    delay(500);                         //Small delay so serial can monitor start up
+  delay(500);                         //Small delay so serial can monitor start up
     //set_arm_clock(150000000);           //Set CPU speed to 150mhz
     //Serial.print("CPU speed set to: ");
     //Serial.println(F_CPU_ACTUAL);
@@ -240,79 +250,57 @@ void setup()
   Serial.println("\r\nStarting Ethernet...");
   EthernetStart();
 
-  Serial.println("\r\nStarting IMU...");
-  //test if CMPS working
-  uint8_t error;
+  Serial.println("\r\nStarting BNO085...");
 
+  // Initialize BNO085 if present.
+  uint8_t error;
   ImuWire.begin();
   
-  //Serial.println("Checking for CMPS14");  `-=p[l]
-  ImuWire.beginTransmission(CMPS14_ADDRESS);
-  error = ImuWire.endTransmission();
+  for (int16_t i = 0; i < nrBNO08xAdresses; i++)
+  {
+      bno08xAddress = bno08xAddresses[i];
 
-  if (error == 0)
-  {
-    //Serial.println("Error = 0");
-    Serial.print("CMPS14 ADDRESs: 0x");
-    Serial.println(CMPS14_ADDRESS, HEX);
-    Serial.println("CMPS14 Ok.");
-    useCMPS = true;
-  }
-  else
-  {
-    //Serial.println("Error = 4");
-    Serial.println("CMPS not Connected or Found");
-  }
+      //Serial.print("\r\nChecking for BNO08X on ");
+      //Serial.println(bno08xAddress, HEX);
+      ImuWire.beginTransmission(bno08xAddress);
+      error = ImuWire.endTransmission();
 
-  if (!useCMPS)
-  {
-      for (int16_t i = 0; i < nrBNO08xAdresses; i++)
+      if (error == 0)
       {
-          bno08xAddress = bno08xAddresses[i];
+          //Serial.println("Error = 0");
+          Serial.print("0x");
+          Serial.print(bno08xAddress, HEX);
+          Serial.println(" BNO08X Ok.");
 
-          //Serial.print("\r\nChecking for BNO08X on ");
-          //Serial.println(bno08xAddress, HEX);
-          ImuWire.beginTransmission(bno08xAddress);
-          error = ImuWire.endTransmission();
-
-          if (error == 0)
+          // Initialize BNO080 lib
+          if (bno08x.begin(bno08xAddress, ImuWire)) //??? Passing NULL to non pointer argument, remove maybe ???
           {
-              //Serial.println("Error = 0");
-              Serial.print("0x");
-              Serial.print(bno08xAddress, HEX);
-              Serial.println(" BNO08X Ok.");
+              //Increase I2C data rate to 400kHz
+              ImuWire.setClock(400000); 
 
-              // Initialize BNO080 lib
-              if (bno08x.begin(bno08xAddress, ImuWire)) //??? Passing NULL to non pointer argument, remove maybe ???
-              {
-                  //Increase I2C data rate to 400kHz
-                  ImuWire.setClock(400000); 
+              delay(300);
 
-                  delay(300);
-
-                  // Use gameRotationVector and set REPORT_INTERVAL
-                  bno08x.enableGameRotationVector(REPORT_INTERVAL);
-                  useBNO08x = true;
-              }
-              else
-              {
-                  Serial.println("BNO080 not detected at given I2C address.");
-              }
+              // Use gameRotationVector and set REPORT_INTERVAL
+              bno08x.enableGameRotationVector(REPORT_INTERVAL);
+              useBNO08x = true;
           }
           else
           {
-              //Serial.println("Error = 4");
-              Serial.print("0x");
-              Serial.print(bno08xAddress, HEX);
-              Serial.println(" BNO08X not Connected or Found");
+              Serial.println("BNO080 not detected at given I2C address.");
           }
-          if (useBNO08x) break;
       }
+      else
+      {
+          //Serial.println("Error = 4");
+          Serial.print("0x");
+          Serial.print(bno08xAddress, HEX);
+          Serial.println(" BNO08X not Connected or Found");
+      }
+      if (useBNO08x) break;
   }
+  
 
   delay(100);
-  Serial.print("\r\nuseCMPS = ");
-  Serial.println(useCMPS);
   Serial.print("useBNO08x = ");
   Serial.println(useBNO08x);
 
@@ -324,61 +312,57 @@ void loop()
     // Read incoming nmea from GPS
     if (SerialGPS->available())
     {
-        if (passThroughGPS)
-        {
-          SerialAOG.write(SerialGPS->read());
-        }
-        else if (useUM982 && udpPassthrough)
-        {
-            //char mChar;
-            char incoming = SerialGPS->read();
-            //Serial.println(incoming);
-            switch (incoming) {
-                case '$':
-                msgBuf[msgBufLen] = incoming;
-                msgBufLen ++;
-                gotDollar = true;
-                break;
-                case '\r':
-                msgBuf[msgBufLen] = incoming;
-                msgBufLen ++;
-                gotCR = true;
-                gotDollar = false;
-                break;
-                case '\n':
-                msgBuf[msgBufLen] = incoming;
-                msgBufLen ++;
-                gotLF = true;
-                gotDollar = false;
-                break;
-                default:
-                if (gotDollar)
-                    {
-                    msgBuf[msgBufLen] = incoming;
-                    msgBufLen ++;
-                    }
-                break;
-            }
-            if (gotCR && gotLF){
-                //Serial.print(msgBuf);
-                //Serial.println(msgBufLen);
-                if (sendUSB) { SerialAOG.write(msgBuf); } // Send USB GPS data if enabled in user settings
-                if (Ethernet_running){
-                    Eth_udpPAOGI.beginPacket(Eth_ipDestination, portDestination);
-                    Eth_udpPAOGI.write(msgBuf, msgBufLen);
-                    Eth_udpPAOGI.endPacket();
-                }
-                gotCR = false;
-                gotLF = false;
-                gotDollar = false;
-                memset( msgBuf, 0, 254 );
-                msgBufLen = 0;
-            }
-        }
-        else
-        {
-          parser << SerialGPS->read();
-        }
+      if (udpPassthrough)
+      {
+          //char mChar;
+          char incoming = SerialGPS->read();
+          //Serial.println(incoming);
+          switch (incoming) {
+              case '$':
+              msgBuf[msgBufLen] = incoming;
+              msgBufLen ++;
+              gotDollar = true;
+              break;
+              case '\r':
+              msgBuf[msgBufLen] = incoming;
+              msgBufLen ++;
+              gotCR = true;
+              gotDollar = false;
+              break;
+              case '\n':
+              msgBuf[msgBufLen] = incoming;
+              msgBufLen ++;
+              gotLF = true;
+              gotDollar = false;
+              break;
+              default:
+              if (gotDollar)
+                  {
+                  msgBuf[msgBufLen] = incoming;
+                  msgBufLen ++;
+                  }
+              break;
+          }
+          if (gotCR && gotLF){
+              //Serial.print(msgBuf);
+              //Serial.println(msgBufLen);
+              if (sendUSB) { SerialAOG.write(msgBuf); } // Send USB GPS data if enabled in user settings
+              if (Ethernet_running){
+                  Eth_udpPAOGI.beginPacket(Eth_ipDestination, portDestination);
+                  Eth_udpPAOGI.write(msgBuf, msgBufLen);
+                  Eth_udpPAOGI.endPacket();
+              }
+              gotCR = false;
+              gotLF = false;
+              gotDollar = false;
+              memset( msgBuf, 0, 254 );
+              msgBufLen = 0;
+          }
+      }
+      else
+      {
+        parser << SerialGPS->read();
+      }
     }
 
     udpNtrip();

@@ -100,12 +100,24 @@ void HPR_Handler()
   // HPR Heading
   parser.getArg(1, umHeading);
   heading = atof(umHeading);
+  if ( filterHeading )
+    {
+      float tempHeading;
+      tempHeading = headingFilter.updateEstimate(heading);
+      heading = tempHeading;
+    }
 
   // HPR Substitute pitch for roll
   if ( parser.getArg(2, umRoll) )
   {
     rollDual = atof(umRoll);
     digitalWrite(GPSGREEN_LED, HIGH);   //Turn green GPS LED ON
+    if ( filterRoll )
+      {
+        float tempRoll;
+        tempRoll = rollFilter.updateEstimate(rollDual);
+        rollDual = tempRoll;
+      }
   }
   else
   {
@@ -117,7 +129,7 @@ void HPR_Handler()
 
   if (solQuality >= 4)
     {
-       if (useBNO08x || useCMPS)
+       if (useBNO08x)
        {
            if (baseLineCheck)
            {
@@ -210,47 +222,6 @@ void imuHandler()
 {
   int16_t temp = 0;
 
-  if (useCMPS)
-  {
-      //the heading x10
-      Wire.beginTransmission(CMPS14_ADDRESS);
-      Wire.write(0x1C);
-      Wire.endTransmission();
-
-      Wire.requestFrom(CMPS14_ADDRESS, 3);
-      while (Wire.available() < 3);
-
-      roll = int16_t(Wire.read() << 8 | Wire.read());
-      if (invertRoll)
-      {
-          roll *= -1;
-      }
-
-      // the heading x10
-      Wire.beginTransmission(CMPS14_ADDRESS);
-      Wire.write(0x02);
-      Wire.endTransmission();
-
-      Wire.requestFrom(CMPS14_ADDRESS, 3);
-      while (Wire.available() < 3);
-
-      temp = Wire.read() << 8 | Wire.read();
-      correctionHeading = temp * 0.1;
-      correctionHeading = correctionHeading * DEG_TO_RAD;
-      itoa(temp, imuHeading, 10);
-
-      // 3rd byte pitch
-      int8_t pitch = Wire.read();
-      itoa(pitch, imuPitch, 10);
-
-      // the roll x10
-      temp = (int16_t)roll;
-      itoa(temp, imuRoll, 10);
-
-      // YawRate - 0 for now
-      itoa(0, imuYawRate, 10);
-  }
-
   if (useBNO08x)
   {
       //BNO is reading in its own timer    
@@ -272,7 +243,7 @@ void imuHandler()
 
   // No else, because we want to use dual heading and IMU roll when both connected
   // We have a IMU so apply the dual/IMU roll/heading error to the IMU data.
-  if ( (useCMPS || useBNO08x) && baseLineCheck)
+  if ( useBNO08x && baseLineCheck)
   {
       float dualTemp;   //To convert IMU data (x10) to a float for the PAOGI so we have the decamal point
               
@@ -444,11 +415,8 @@ void BuildNmea(void)
 
     strcat(nmea, "\r\n");
 
-    if (!passThroughGPS && !passThroughGPS2)
-    {
-        if (sendUSB) { SerialAOG.write(nmea); } // Send USB GPS data if enabled in user settings
-    }
-
+    if (sendUSB) { SerialAOG.write(nmea); } // Send USB GPS data if enabled in user settings
+    
     if (Ethernet_running)   //If ethernet running send the GPS there
     {
         int len = strlen(nmea);
